@@ -16,14 +16,30 @@ import (
 )
 
 // FindMatchmakeSessionBySearchCriteria finds matchmake sessions with the given search criterias
-func FindMatchmakeSessionBySearchCriteria(manager *common_globals.MatchmakingManager, connection *nex.PRUDPConnection, searchCriterias []match_making_types.MatchmakeSessionSearchCriteria, resultRange types.ResultRange, sourceMatchmakeSession *match_making_types.MatchmakeSession) ([]match_making_types.MatchmakeSession, *nex.Error) {
+func FindMatchmakeSessionBySearchCriteria(manager *common_globals.MatchmakingManager, connection *nex.PRUDPConnection, searchCriterias []match_making_types.MatchmakeSessionSearchCriteria, resultRange types.ResultRange, sourceMatchmakeSession *match_making_types.MatchmakeSession, filterBlocklist bool) ([]match_making_types.MatchmakeSession, *nex.Error) {
 	resultMatchmakeSessions := make([]match_making_types.MatchmakeSession, 0)
 
 	endpoint := connection.Endpoint().(*nex.PRUDPEndPoint)
+	callerPID := connection.PID()
 
 	var friendList []uint32
 	if manager.GetUserFriendPIDs != nil {
 		friendList = manager.GetUserFriendPIDs(uint32(connection.PID()))
+	}
+
+	var blockList []types.PID
+	var blockedByList []types.PID
+	var nexError *nex.Error
+
+	if filterBlocklist {
+		blockList, nexError = GetBlockList(manager, callerPID)
+		if nexError != nil {
+			return nil, nexError
+		}
+		blockedByList, nexError = GetBlockedByList(manager, callerPID)
+		if nexError != nil {
+			return nil, nexError
+		}
 	}
 
 	if resultRange.Offset == math.MaxUint32 {
@@ -71,6 +87,29 @@ func FindMatchmakeSessionBySearchCriteria(manager *common_globals.MatchmakingMan
 			(CASE WHEN $6=true THEN g.host_pid <> 0 ELSE true END) AND
 			(CASE WHEN $7=true THEN ms.user_password_enabled=false ELSE true END) AND
 			(CASE WHEN $8=true THEN ms.system_password_enabled=false ELSE true END)`
+
+		if filterBlocklist {
+			// Add SQL to filter out sessions where any participant has blocked the caller
+			if len(blockedByList) > 0 {
+				blockedByPIDStrings := make([]string, len(blockedByList))
+				for i, pid := range blockedByList {
+					blockedByPIDStrings[i] = strconv.FormatUint(uint64(pid), 10)
+				}
+				// Check if any participant (g.participants) is in the blockedByList
+				// This checks for intersection: g.participants && ARRAY[pid1, pid2]::numeric[]
+				searchStatement += fmt.Sprintf(` AND NOT (g.participants && ARRAY[%s]::numeric[])`, strings.Join(blockedByPIDStrings, ","))
+			}
+
+			// Add SQL to filter out sessions where the caller has blocked any participant
+			if len(blockList) > 0 {
+				blockPIDStrings := make([]string, len(blockList))
+				for i, pid := range blockList {
+					blockPIDStrings[i] = strconv.FormatUint(uint64(pid), 10)
+				}
+				// Check if any participant (g.participants) is in the blockList
+				searchStatement += fmt.Sprintf(` AND NOT (g.participants && ARRAY[%s]::numeric[])`, strings.Join(blockPIDStrings, ","))
+			}
+		}
 
 		var valid bool = true
 		for i, attrib := range searchCriteria.Attribs {

@@ -45,7 +45,12 @@ func GetPersistentGatheringsByParticipant(manager *common_globals.MatchmakingMan
 		WHERE
 		g.registered=true AND
 		g.type='PersistentGathering' AND
-		$1=ANY(g.participants)
+		$1=ANY(g.participants) AND
+		NOT EXISTS (
+			SELECT 1
+			FROM matchmaking.block_lists bl
+			WHERE bl.user_pid = ANY(g.participants) AND bl.blocked_pid = $4
+		)
 		LIMIT $2 OFFSET $3`,
 		participant,
 		resultRange.Length,

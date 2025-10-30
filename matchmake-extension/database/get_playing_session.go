@@ -8,7 +8,7 @@ import (
 )
 
 // GetPlayingSession returns the playing sessions of the given PIDs
-func GetPlayingSession(manager *common_globals.MatchmakingManager, listPID types.List[types.PID]) (types.List[match_making_types.PlayingSession], *nex.Error) {
+func GetPlayingSession(manager *common_globals.MatchmakingManager, callerPID types.PID, listPID []types.PID) (types.List[match_making_types.PlayingSession], *nex.Error) {
 	playingSessions := make([]match_making_types.PlayingSession, 0, 1000) // * Allocate for a capacity of up to MAX_MATCHMAKE_SESSION_BY_PARTICIPANT entries
 	for _, pid := range listPID {
 		if len(playingSessions) >= 1000 { // * MAX_MATCHMAKE_SESSION_BY_PARTICIPANT
@@ -46,7 +46,12 @@ func GetPlayingSession(manager *common_globals.MatchmakingManager, listPID types
 		WHERE
 		g.registered=true AND
 		g.type='MatchmakeSession' AND
-		$1=ANY(g.participants)`, pid)
+		$1=ANY(g.participants) AND
+		NOT EXISTS (
+			SELECT 1
+			FROM matchmaking.block_lists bl
+			WHERE bl.user_pid = ANY(g.participants) AND bl.blocked_pid = $2
+		)`, pid, callerPID)
 		if err != nil {
 			common_globals.Logger.Critical(err.Error())
 			continue

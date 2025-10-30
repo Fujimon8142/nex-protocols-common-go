@@ -3,10 +3,12 @@ package matchmake_extension
 import (
 	"github.com/PretendoNetwork/nex-go/v2"
 	common_globals "github.com/PretendoNetwork/nex-protocols-common-go/v2/globals"
+	match_making_database "github.com/PretendoNetwork/nex-protocols-common-go/v2/match-making/database"
 	"github.com/PretendoNetwork/nex-protocols-common-go/v2/matchmake-extension/database"
 	"github.com/PretendoNetwork/nex-protocols-go/v2/match-making/constants"
 	match_making_types "github.com/PretendoNetwork/nex-protocols-go/v2/match-making/types"
 	matchmake_extension "github.com/PretendoNetwork/nex-protocols-go/v2/matchmake-extension"
+	"github.com/PretendoNetwork/nex-go/v2/types"
 )
 
 func (commonProtocol *CommonProtocol) joinMatchmakeSessionWithParam(err error, packet nex.PacketInterface, callID uint32, joinMatchmakeSessionParam match_making_types.JoinMatchmakeSessionParam) (*nex.RMCMessage, *nex.Error) {
@@ -23,6 +25,7 @@ func (commonProtocol *CommonProtocol) joinMatchmakeSessionWithParam(err error, p
 
 	connection := packet.Sender().(*nex.PRUDPConnection)
 	endpoint := connection.Endpoint().(*nex.PRUDPEndPoint)
+	callerPID := connection.PID() // Get caller PID
 
 	if joinMatchmakeSessionParam.GIDForParticipationCheck != 0 {
 		// * Check that all new participants are participating in the specified gathering ID
@@ -39,6 +42,48 @@ func (commonProtocol *CommonProtocol) joinMatchmakeSessionWithParam(err error, p
 		commonProtocol.manager.Mutex.Unlock()
 		return nil, nexError
 	}
+
+	// --- BEGIN BLOCKLIST CHECK ---
+	// Get session participants
+	_, _, participants, _, nexError := match_making_database.FindGatheringByID(commonProtocol.manager, uint32(joinMatchmakeSessionParam.GID))
+	if nexError != nil {
+		commonProtocol.manager.Mutex.Unlock()
+		return nil, nexError
+	}
+
+	// Get block lists
+	blockList, nexError := database.GetBlockList(commonProtocol.manager, callerPID)
+	if nexError != nil {
+		commonProtocol.manager.Mutex.Unlock()
+		return nil, nexError
+	}
+
+	blockedByList, nexError := database.GetBlockedByList(commonProtocol.manager, callerPID)
+	if nexError != nil {
+		commonProtocol.manager.Mutex.Unlock()
+		return nil, nexError
+	}
+
+	// Check lists against participants
+	// Note: This param struct doesn't have dontCareMyBlockList, so we check both lists.
+	for _, participantPID := range participants {
+		// Check if caller is blocked by a participant
+		for _, blockerPID := range blockedByList {
+			if types.PID(participantPID) == blockerPID {
+				commonProtocol.manager.Mutex.Unlock()
+				return nil, nex.NewError(nex.ResultCodes.RendezVous.DeniedByParticipants, "change_error") // RendezVous::DeniedByParticipants
+			}
+		}
+
+		// Check if caller has blocked a participant
+		for _, blockedPID := range blockList {
+			if types.PID(participantPID) == blockedPID {
+				commonProtocol.manager.Mutex.Unlock()
+				return nil, nex.NewError(nex.ResultCodes.RendezVous.ParticipantInBlackList, "change_error") // RendezVous::ParticipantInBlackList
+			}
+		}
+	}
+	// --- END BLOCKLIST CHECK ---
 
 	// TODO - Are these the correct error codes?
 	if bool(joinedMatchmakeSession.UserPasswordEnabled) && !joinMatchmakeSessionParam.StrUserPassword.Equals(joinedMatchmakeSession.UserPassword) {

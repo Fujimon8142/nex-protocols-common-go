@@ -31,7 +31,7 @@ func (commonProtocol *CommonProtocol) getSimplePlayingSession(err error, packet 
 
 	commonProtocol.manager.Mutex.RLock()
 
-	simplePlayingSessions, nexError := database.GetSimplePlayingSession(commonProtocol.manager, listPID)
+	simplePlayingSessions, nexError := database.GetSimplePlayingSession(commonProtocol.manager, connection.PID(), listPID)
 	if nexError != nil {
 		commonProtocol.manager.Mutex.RUnlock()
 		return nil, nexError

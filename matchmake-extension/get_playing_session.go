@@ -24,7 +24,7 @@ func (commonProtocol *CommonProtocol) getPlayingSession(err error, packet nex.Pa
 
 	commonProtocol.manager.Mutex.RLock()
 
-	lstPlayingSession, nexError := database.GetPlayingSession(commonProtocol.manager, lstPID)
+	lstPlayingSession, nexError := database.GetPlayingSession(commonProtocol.manager, connection.PID(), lstPID)
 	if nexError != nil {
 		commonProtocol.manager.Mutex.RUnlock()
 		return nil, nexError

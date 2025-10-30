@@ -4,6 +4,7 @@ import (
 	"github.com/PretendoNetwork/nex-go/v2"
 	"github.com/PretendoNetwork/nex-go/v2/types"
 	common_globals "github.com/PretendoNetwork/nex-protocols-common-go/v2/globals"
+	match_making_database "github.com/PretendoNetwork/nex-protocols-common-go/v2/match-making/database"
 	"github.com/PretendoNetwork/nex-protocols-common-go/v2/matchmake-extension/database"
 	matchmake_extension "github.com/PretendoNetwork/nex-protocols-go/v2/matchmake-extension"
 )
@@ -23,6 +24,7 @@ func (commonProtocol *CommonProtocol) joinMatchmakeSessionEx(err error, packet n
 	connection := packet.Sender().(*nex.PRUDPConnection)
 	endpoint := connection.Endpoint().(*nex.PRUDPEndPoint)
 	server := endpoint.Server
+	callerPID := connection.PID() // Get caller PID
 
 	joinedMatchmakeSession, _, nexError := database.GetMatchmakeSessionByID(commonProtocol.manager, endpoint, uint32(gid))
 	if nexError != nil {
@@ -30,6 +32,50 @@ func (commonProtocol *CommonProtocol) joinMatchmakeSessionEx(err error, packet n
 		commonProtocol.manager.Mutex.Unlock()
 		return nil, nexError
 	}
+
+	// --- BEGIN BLOCKLIST CHECK ---
+	// Get session participants
+	_, _, participants, _, nexError := match_making_database.FindGatheringByID(commonProtocol.manager, uint32(gid))
+	if nexError != nil {
+		commonProtocol.manager.Mutex.Unlock()
+		return nil, nexError
+	}
+
+	// Get block lists
+	blockedByList, nexError := database.GetBlockedByList(commonProtocol.manager, callerPID)
+	if nexError != nil {
+		commonProtocol.manager.Mutex.Unlock()
+		return nil, nexError
+	}
+
+	// Check if caller is blocked by a participant
+	for _, participantPID := range participants {
+		for _, blockerPID := range blockedByList {
+			if types.PID(participantPID) == blockerPID {
+				commonProtocol.manager.Mutex.Unlock()
+				return nil, nex.NewError(nex.ResultCodes.RendezVous.DeniedByParticipants, "change_error") // RendezVous::DeniedByParticipants
+			}
+		}
+	}
+
+	// Check if caller has blocked a participant (if dontCareMyBlockList is false)
+	if !bool(dontCareMyBlockList) {
+		blockList, nexError := database.GetBlockList(commonProtocol.manager, callerPID)
+		if nexError != nil {
+			commonProtocol.manager.Mutex.Unlock()
+			return nil, nexError
+		}
+
+		for _, participantPID := range participants {
+			for _, blockedPID := range blockList {
+				if types.PID(participantPID) == blockedPID {
+					commonProtocol.manager.Mutex.Unlock()
+					return nil, nex.NewError(nex.ResultCodes.RendezVous.ParticipantInBlackList, "change_error") // RendezVous::ParticipantInBlackList
+				}
+			}
+		}
+	}
+	// --- END BLOCKLIST CHECK ---
 
 	// TODO - Is this the correct error code?
 	if joinedMatchmakeSession.UserPasswordEnabled || joinedMatchmakeSession.SystemPasswordEnabled {

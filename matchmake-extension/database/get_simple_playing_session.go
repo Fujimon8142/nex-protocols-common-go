@@ -10,7 +10,7 @@ import (
 )
 
 // GetSimplePlayingSession returns the simple playing sessions of the given PIDs
-func GetSimplePlayingSession(manager *common_globals.MatchmakingManager, listPID []types.PID) ([]match_making_types.SimplePlayingSession, *nex.Error) {
+func GetSimplePlayingSession(manager *common_globals.MatchmakingManager, callerPID types.PID, listPID []types.PID) ([]match_making_types.SimplePlayingSession, *nex.Error) {
 	simplePlayingSessions := make([]match_making_types.SimplePlayingSession, 0)
 	for _, pid := range listPID {
 		simplePlayingSession := match_making_types.NewSimplePlayingSession()
@@ -24,7 +24,12 @@ func GetSimplePlayingSession(manager *common_globals.MatchmakingManager, listPID
 		WHERE
 		g.registered=true AND
 		g.type='MatchmakeSession' AND
-		$1=ANY(g.participants)`, pid).Scan(
+		$1=ANY(g.participants) AND
+		NOT EXISTS (
+			SELECT 1
+			FROM matchmaking.block_lists bl
+			WHERE bl.user_pid = ANY(g.participants) AND bl.blocked_pid = $2
+		)`, pid, callerPID).Scan(
 		&simplePlayingSession.GatheringID,
 		&simplePlayingSession.Attribute0,
 		&simplePlayingSession.GameMode)
