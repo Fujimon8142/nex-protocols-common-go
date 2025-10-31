@@ -19,19 +19,25 @@ func (commonProtocol *CommonProtocol) getSimplePlayingSession(err error, packet 
 
 	connection := packet.Sender().(*nex.PRUDPConnection)
 	endpoint := connection.Endpoint().(*nex.PRUDPEndPoint)
+	callerPID := connection.PID()
 
 	// * Does nothing if element is not present in the List
 	listPID = slices.DeleteFunc(listPID, func(pid types.PID) bool {
-		return pid == connection.PID()
+		return pid == callerPID
 	})
 
 	if includeLoginUser {
-		listPID = append(listPID, connection.PID())
+		listPID = append(listPID, callerPID)
+	}
+
+	var friendList []uint32
+	if commonProtocol.manager.GetUserFriendPIDs != nil {
+		friendList = commonProtocol.manager.GetUserFriendPIDs(uint32(callerPID))
 	}
 
 	commonProtocol.manager.Mutex.RLock()
 
-	simplePlayingSessions, nexError := database.GetSimplePlayingSession(commonProtocol.manager, connection.PID(), listPID)
+	simplePlayingSessions, nexError := database.GetSimplePlayingSession(commonProtocol.manager, callerPID, listPID, friendList)
 	if nexError != nil {
 		commonProtocol.manager.Mutex.RUnlock()
 		return nil, nexError

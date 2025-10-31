@@ -11,7 +11,7 @@ import (
 )
 
 // GetPersistentGatheringsByParticipant finds the active persistent gatherings that a user is participating on
-func GetPersistentGatheringsByParticipant(manager *common_globals.MatchmakingManager, sourcePID types.PID, participant types.PID, resultRange types.ResultRange) ([]match_making_types.PersistentGathering, *nex.Error) {
+func GetPersistentGatheringsByParticipant(manager *common_globals.MatchmakingManager, sourcePID types.PID, participant types.PID, resultRange types.ResultRange, friendList []uint32) ([]match_making_types.PersistentGathering, *nex.Error) {
 	persistentGatherings := make([]match_making_types.PersistentGathering, 0)
 	rows, err := manager.Database.Query(`SELECT
 		g.id,
@@ -49,13 +49,26 @@ func GetPersistentGatheringsByParticipant(manager *common_globals.MatchmakingMan
 		NOT EXISTS (
 			SELECT 1
 			FROM matchmaking.block_lists bl
-			WHERE bl.user_pid = ANY(g.participants) AND bl.blocked_pid = $4
+			WHERE bl.user_pid = $1 AND bl.blocked_pid = $4
+		)
+		AND (
+			$1 = ANY($5) -- Target user is a friend
+			OR
+			-- Target user is not a friend, check privacy settings
+			-- COALESCE is used to default to 'true' (visible) if no row exists
+			COALESCE(
+				(SELECT ps.participation_community
+				FROM matchmaking.privacy_settings ps
+				WHERE ps.user_pid = $1),
+				true
+			)
 		)
 		LIMIT $2 OFFSET $3`,
 		participant,
 		resultRange.Length,
 		resultRange.Offset,
 		sourcePID,
+		pqextended.Array(friendList),
 	)
 	if err != nil {
 		return nil, nex.NewError(nex.ResultCodes.Core.Unknown, err.Error())

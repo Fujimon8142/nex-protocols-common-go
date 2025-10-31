@@ -21,10 +21,16 @@ func (commonProtocol *CommonProtocol) getPlayingSession(err error, packet nex.Pa
 
 	connection := packet.Sender().(*nex.PRUDPConnection)
 	endpoint := connection.Endpoint().(*nex.PRUDPEndPoint)
+	callerPID := connection.PID()
+
+	var friendList []uint32
+	if commonProtocol.manager.GetUserFriendPIDs != nil {
+		friendList = commonProtocol.manager.GetUserFriendPIDs(uint32(callerPID))
+	}
 
 	commonProtocol.manager.Mutex.RLock()
 
-	lstPlayingSession, nexError := database.GetPlayingSession(commonProtocol.manager, connection.PID(), lstPID)
+	lstPlayingSession, nexError := database.GetPlayingSession(commonProtocol.manager, callerPID, lstPID, friendList)
 	if nexError != nil {
 		commonProtocol.manager.Mutex.RUnlock()
 		return nil, nexError

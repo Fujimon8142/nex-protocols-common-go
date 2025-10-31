@@ -17,10 +17,16 @@ func (commonProtocol *CommonProtocol) findCommunityByParticipant(err error, pack
 
 	connection := packet.Sender().(*nex.PRUDPConnection)
 	endpoint := connection.Endpoint().(*nex.PRUDPEndPoint)
+	callerPID := connection.PID()
+
+	var friendList []uint32
+	if commonProtocol.manager.GetUserFriendPIDs != nil {
+		friendList = commonProtocol.manager.GetUserFriendPIDs(uint32(callerPID))
+	}
 
 	commonProtocol.manager.Mutex.RLock()
 
-	communities, nexError := database.GetPersistentGatheringsByParticipant(commonProtocol.manager, connection.PID(), pid, resultRange)
+	communities, nexError := database.GetPersistentGatheringsByParticipant(commonProtocol.manager, callerPID, pid, resultRange, friendList)
 	if nexError != nil {
 		commonProtocol.manager.Mutex.RUnlock()
 		return nil, nexError

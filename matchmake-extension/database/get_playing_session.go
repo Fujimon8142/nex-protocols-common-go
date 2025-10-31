@@ -5,10 +5,11 @@ import (
 	"github.com/PretendoNetwork/nex-go/v2/types"
 	common_globals "github.com/PretendoNetwork/nex-protocols-common-go/v2/globals"
 	match_making_types "github.com/PretendoNetwork/nex-protocols-go/v2/match-making/types"
+	pqextended "github.com/PretendoNetwork/pq-extended"
 )
 
 // GetPlayingSession returns the playing sessions of the given PIDs
-func GetPlayingSession(manager *common_globals.MatchmakingManager, callerPID types.PID, listPID []types.PID) (types.List[match_making_types.PlayingSession], *nex.Error) {
+func GetPlayingSession(manager *common_globals.MatchmakingManager, callerPID types.PID, listPID types.List[types.PID], friendList []uint32) (types.List[match_making_types.PlayingSession], *nex.Error) {
 	playingSessions := make([]match_making_types.PlayingSession, 0, 1000) // * Allocate for a capacity of up to MAX_MATCHMAKE_SESSION_BY_PARTICIPANT entries
 	for _, pid := range listPID {
 		if len(playingSessions) >= 1000 { // * MAX_MATCHMAKE_SESSION_BY_PARTICIPANT
@@ -50,8 +51,21 @@ func GetPlayingSession(manager *common_globals.MatchmakingManager, callerPID typ
 		NOT EXISTS (
 			SELECT 1
 			FROM matchmaking.block_lists bl
-			WHERE bl.user_pid = ANY(g.participants) AND bl.blocked_pid = $2
-		)`, pid, callerPID)
+			WHERE bl.user_pid = $1 AND bl.blocked_pid = $2
+		)
+		AND (
+			$1 = ANY($3) -- Target user is a friend
+			OR
+			-- Target user is not a friend, check privacy settings
+			-- COALESCE is used to default to 'true' (visible) if no row exists
+			COALESCE(
+				(SELECT ps.online_status
+				FROM matchmaking.privacy_settings ps
+				WHERE ps.user_pid = $1),
+				true
+			)
+		)
+		`, pid, callerPID, pqextended.Array(friendList))
 		if err != nil {
 			common_globals.Logger.Critical(err.Error())
 			continue

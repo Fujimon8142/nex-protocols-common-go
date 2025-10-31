@@ -2,9 +2,6 @@ package database
 
 import (
 	"database/sql"
-	"strconv"
-	"strings"
-	"fmt"
 	"time"
 
 	"github.com/PretendoNetwork/nex-go/v2"
@@ -23,17 +20,6 @@ func FindMatchmakeSession(manager *common_globals.MatchmakingManager, connection
 
 	endpoint := connection.Endpoint().(*nex.PRUDPEndPoint)
 	callerPID := connection.PID()
-
-	// --- BEGIN BLOCKLIST ---
-	blockList, nexError := GetBlockList(manager, callerPID)
-	if nexError != nil {
-		return nil, nexError
-	}
-	blockedByList, nexError := GetBlockedByList(manager, callerPID)
-	if nexError != nil {
-		return nil, nexError
-	}
-	// --- END BLOCKLIST ---
 
 	searchStatement := `SELECT
 		g.id,
@@ -82,29 +68,21 @@ func FindMatchmakeSession(manager *common_globals.MatchmakingManager, connection
 		ms.attribs[6]=$9 AND
 		ms.matchmake_system_type=$10 AND
 		ms.codeword=$11 AND (CASE WHEN g.participation_policy=98 THEN g.owner_pid=ANY($12) ELSE true END)
-		`
+		
+		-- BEGIN BLOCKLIST SQL --
+		AND NOT EXISTS (
+			SELECT 1
+			FROM matchmaking.block_lists bl
+			WHERE bl.user_pid = ANY(g.participants) AND bl.blocked_pid = $13
+		)
+		AND NOT EXISTS (
+			SELECT 1
+			FROM matchmaking.block_lists bl
+			WHERE bl.user_pid = $13 AND bl.blocked_pid = ANY(g.participants)
+		)
+		-- END BLOCKLIST SQL --
 
-	// --- BEGIN BLOCKLIST SQL ---
-	// Add SQL to filter out sessions where any participant has blocked the caller
-	if len(blockedByList) > 0 {
-		blockedByPIDStrings := make([]string, len(blockedByList))
-		for i, pid := range blockedByList {
-			blockedByPIDStrings[i] = strconv.FormatUint(uint64(pid), 10)
-		}
-		searchStatement += fmt.Sprintf(` AND NOT (g.participants && ARRAY[%s]::numeric[])`, strings.Join(blockedByPIDStrings, ","))
-	}
-
-	// Add SQL to filter out sessions where the caller has blocked any participant
-	if len(blockList) > 0 {
-		blockPIDStrings := make([]string, len(blockList))
-		for i, pid := range blockList {
-			blockPIDStrings[i] = strconv.FormatUint(uint64(pid), 10)
-		}
-		searchStatement += fmt.Sprintf(` AND NOT (g.participants && ARRAY[%s]::numeric[])`, strings.Join(blockPIDStrings, ","))
-	}
-	// --- END BLOCKLIST SQL ---
-
-	searchStatement += ` ORDER BY abs($5 - ms.attribs[2])` // * Use "Closest attribute" selection method, guessing from Mario Kart 7
+		ORDER BY abs($5 - ms.attribs[2])` // * Use "Closest attribute" selection method, guessing from Mario Kart 7
 
 	var friendList []uint32
 	// * Prevent access to friend rooms if not implemented
@@ -131,6 +109,7 @@ func FindMatchmakeSession(manager *common_globals.MatchmakingManager, connection
 		searchMatchmakeSession.MatchmakeSystemType,
 		searchMatchmakeSession.CodeWord,
 		pqextended.Array(friendList),
+		callerPID, // $13
 	).Scan(
 		&resultMatchmakeSession.Gathering.ID,
 		&resultMatchmakeSession.Gathering.OwnerPID,

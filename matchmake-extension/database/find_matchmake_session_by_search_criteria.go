@@ -20,26 +20,10 @@ func FindMatchmakeSessionBySearchCriteria(manager *common_globals.MatchmakingMan
 	resultMatchmakeSessions := make([]match_making_types.MatchmakeSession, 0)
 
 	endpoint := connection.Endpoint().(*nex.PRUDPEndPoint)
-	callerPID := connection.PID()
 
 	var friendList []uint32
 	if manager.GetUserFriendPIDs != nil {
 		friendList = manager.GetUserFriendPIDs(uint32(connection.PID()))
-	}
-
-	var blockList []types.PID
-	var blockedByList []types.PID
-	var nexError *nex.Error
-
-	if filterBlocklist {
-		blockList, nexError = GetBlockList(manager, callerPID)
-		if nexError != nil {
-			return nil, nexError
-		}
-		blockedByList, nexError = GetBlockedByList(manager, callerPID)
-		if nexError != nil {
-			return nil, nexError
-		}
 	}
 
 	if resultRange.Offset == math.MaxUint32 {
@@ -88,27 +72,34 @@ func FindMatchmakeSessionBySearchCriteria(manager *common_globals.MatchmakingMan
 			(CASE WHEN $7=true THEN ms.user_password_enabled=false ELSE true END) AND
 			(CASE WHEN $8=true THEN ms.system_password_enabled=false ELSE true END)`
 
-		if filterBlocklist {
-			// Add SQL to filter out sessions where any participant has blocked the caller
-			if len(blockedByList) > 0 {
-				blockedByPIDStrings := make([]string, len(blockedByList))
-				for i, pid := range blockedByList {
-					blockedByPIDStrings[i] = strconv.FormatUint(uint64(pid), 10)
-				}
-				// Check if any participant (g.participants) is in the blockedByList
-				// This checks for intersection: g.participants && ARRAY[pid1, pid2]::numeric[]
-				searchStatement += fmt.Sprintf(` AND NOT (g.participants && ARRAY[%s]::numeric[])`, strings.Join(blockedByPIDStrings, ","))
-			}
+		// $9 is reserved for callerPID in blocklist filters
+		queryParams := []interface{}{
+			searchCriteria.ReferGID,
+			searchCriteria.CodeWord,
+			len(searchCriteria.Attribs),
+			pqextended.Array(friendList),
+			searchCriteria.ExcludeLocked,
+			searchCriteria.ExcludeNonHostPID,
+			searchCriteria.ExcludeUserPasswordSet,
+			searchCriteria.ExcludeSystemPasswordSet,
+		}
 
-			// Add SQL to filter out sessions where the caller has blocked any participant
-			if len(blockList) > 0 {
-				blockPIDStrings := make([]string, len(blockList))
-				for i, pid := range blockList {
-					blockPIDStrings[i] = strconv.FormatUint(uint64(pid), 10)
-				}
-				// Check if any participant (g.participants) is in the blockList
-				searchStatement += fmt.Sprintf(` AND NOT (g.participants && ARRAY[%s]::numeric[])`, strings.Join(blockPIDStrings, ","))
-			}
+		if filterBlocklist {
+			// Filter sessions where any participant has blocked the caller
+			searchStatement += `
+			AND NOT EXISTS (
+				SELECT 1
+				FROM matchmaking.block_lists bl
+				WHERE bl.user_pid = ANY(g.participants) AND bl.blocked_pid = $9
+			)`
+			// Filter sessions where the caller has blocked any participant
+			searchStatement += `
+			AND NOT EXISTS (
+				SELECT 1
+				FROM matchmaking.block_lists bl
+				WHERE bl.user_pid = $9 AND bl.blocked_pid = ANY(g.participants)
+			)`
+			queryParams = append(queryParams, connection.PID())
 		}
 
 		var valid bool = true
@@ -311,7 +302,7 @@ func FindMatchmakeSessionBySearchCriteria(manager *common_globals.MatchmakingMan
 				searchStatement += fmt.Sprintf(` ORDER BY abs(%d - ms.attribs[2] + %d - ms.progress_score)`, attribute1, sourceMatchmakeSession.ProgressScore)
 			}
 
-		// case constants.SelectionMethodScoreBased: // * According to notes this is related with the MatchmakeParam. TODO - Implement this
+			// case constants.SelectionMethodScoreBased: // * According to notes this is related with the MatchmakeParam. TODO - Implement this
 		}
 
 		// * If the ResultRange inside the MatchmakeSessionSearchCriteria is valid (only present on NEX 4.0+), use that
@@ -324,16 +315,7 @@ func FindMatchmakeSessionBySearchCriteria(manager *common_globals.MatchmakingMan
 			searchStatement += fmt.Sprintf(` LIMIT %d OFFSET %d`, uint32(resultRange.Length) - uint32(len(resultMatchmakeSessions)), uint32(resultRange.Offset))
 		}
 
-		rows, err := manager.Database.Query(searchStatement,
-			searchCriteria.ReferGID,
-			searchCriteria.CodeWord,
-			len(searchCriteria.Attribs),
-			pqextended.Array(friendList),
-			searchCriteria.ExcludeLocked,
-			searchCriteria.ExcludeNonHostPID,
-			searchCriteria.ExcludeUserPasswordSet,
-			searchCriteria.ExcludeSystemPasswordSet,
-		)
+		rows, err := manager.Database.Query(searchStatement, queryParams...)
 		if err != nil {
 			common_globals.Logger.Critical(err.Error())
 			continue

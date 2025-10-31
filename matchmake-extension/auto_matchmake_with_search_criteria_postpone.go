@@ -53,7 +53,14 @@ func (commonProtocol *CommonProtocol) autoMatchmakeWithSearchCriteriaPostpone(er
 
 	resultRange := types.NewResultRange()
 	resultRange.Length = 1
-	resultSessions, nexError := database.FindMatchmakeSessionBySearchCriteria(commonProtocol.manager, connection, lstSearchCriteria, resultRange, &matchmakeSession, true) // filterBlocklist = true
+	resultSessions, nexError := database.FindMatchmakeSessionBySearchCriteria(
+		commonProtocol.manager, 
+		connection, 
+		lstSearchCriteria, 
+		resultRange, 
+		&matchmakeSession, 
+		true, // filterBlocklist is true here to consider blocklists when searching for sessions
+	)
 	if nexError != nil {
 		commonProtocol.manager.Mutex.Unlock()
 		return nil, nexError
