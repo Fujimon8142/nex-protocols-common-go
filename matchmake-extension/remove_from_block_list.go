@@ -17,13 +17,25 @@ func (commonProtocol *CommonProtocol) removeFromBlockList(err error, packet nex.
 	connection := packet.Sender().(*nex.PRUDPConnection)
 	endpoint := connection.Endpoint().(*nex.PRUDPEndPoint)
 
+	// --- DEBUGログ追加 (1/2) ---
+	common_globals.Logger.Infof("RemoveFromBlockList called by PID: %d", connection.PID())
+	common_globals.Logger.Infof("Attempting to unblock PIDs: %v", lstPrincipalID)
+	// --- DEBUGログ追加ここまで ---
+
 	commonProtocol.manager.Mutex.Lock()
 	defer commonProtocol.manager.Mutex.Unlock()
 
 	nexError := database.RemoveFromBlockList(commonProtocol.manager, connection.PID(), lstPrincipalID)
 	if nexError != nil {
+		// --- DEBUGログ追加 (2/2) ---
+		common_globals.Logger.Errorf("RemoveFromBlockList failed for PID %d: %s", connection.PID(), nexError.Error())
+		// --- DEBUGログ追加ここまで ---
 		return nil, nexError
 	}
+
+	// --- DEBUGログ追加 (2/2) ---
+	common_globals.Logger.Infof("RemoveFromBlockList successful for PID %d.", connection.PID())
+	// --- DEBUGログ追加ここまで ---
 
 	rmcResponse := nex.NewRMCSuccess(endpoint, nil)
 	rmcResponse.ProtocolID = matchmake_extension.ProtocolID
